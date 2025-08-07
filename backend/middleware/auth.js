@@ -1,10 +1,83 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
-// This is a placeholder for a real secret key, which should be in an environment variable
-const JWT_SECRET = 'your_jwt_secret';
+/**
+ * @swagger
+ * components:
+ *   securitySchemes:
+ *     bearerAuth:
+ *       type: http
+ *       scheme: bearer
+ *       bearerFormat: JWT
+ */
 
-module.exports = function (req, res, next) {
-  // For now, we'll just pass the request through
-  // In a real application, you would verify the JWT here
-  next();
+// Verify JWT token
+const authenticateToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'Access token required'
+      });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('-password');
+    
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token'
+      });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid or expired token'
+    });
+  }
+};
+
+// Role-based access control
+const authorize = (...roles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Insufficient permissions'
+      });
+    }
+
+    next();
+  };
+};
+
+// Admin only access
+const adminOnly = authorize('admin');
+
+// Pharmacist and admin access
+const pharmacistAndAdmin = authorize('admin', 'pharmacist');
+
+// Cashier, pharmacist and admin access
+const cashierAndAbove = authorize('admin', 'pharmacist', 'cashier');
+
+module.exports = {
+  authenticateToken,
+  authorize,
+  adminOnly,
+  pharmacistAndAdmin,
+  cashierAndAbove
 };

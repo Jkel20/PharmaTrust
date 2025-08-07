@@ -1,16 +1,18 @@
 {
-  "name": "app",
+  "name": "pharmacy-management-system",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A comprehensive web-based Pharmacy Management System",
+  "main": "backend/server.js",
   "scripts": {
+    "start": "node backend/server.js",
+    "dev": "nodemon backend/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Jkel20/PharmaTrust.git"
   },
-  "keywords": [],
+  "keywords": ["pharmacy", "management", "inventory", "sales", "prescriptions"],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
@@ -20,9 +22,21 @@
   "homepage": "https://github.com/Jkel20/PharmaTrust#readme",
   "dependencies": {
     "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.16.4",
-    "node-cron": "^4.2.1"
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^4.2.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
   }
 }
