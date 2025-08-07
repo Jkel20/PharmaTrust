@@ -1,117 +1,454 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/auth');
 const Product = require('../models/Product');
+const { authenticateToken, canManageInventory } = require('../middleware/auth');
+const { validateProductCreation, validateProductUpdate, validateId, validatePagination, validateSearch } = require('../middleware/validation');
 
-// @route   POST api/products
-// @desc    Create a product
-// @access  Private
-router.post('/', auth, async (req, res) => {
-  const { name, description, price, quantity, expiryDate, lowStockThreshold } = req.body;
-
+/**
+ * @swagger
+ * /api/products:
+ *   get:
+ *     summary: Get all products
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *         description: Page number
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *         description: Number of items per page
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *         description: Filter by category
+ *       - in: query
+ *         name: q
+ *         schema:
+ *           type: string
+ *         description: Search query
+ *     responses:
+ *       200:
+ *         description: Products retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+router.get('/', authenticateToken, validatePagination, validateSearch, async (req, res) => {
   try {
-    const newProduct = new Product({
-      name,
-      description,
-      price,
-      quantity,
-      expiryDate,
-      lowStockThreshold,
+    const { page = 1, limit = 10, category, q, sort = 'createdAt', order = 'desc' } = req.query;
+    
+    // Build query
+    const query = { isActive: true };
+    
+    if (category) {
+      query.category = category;
+    }
+    
+    if (q) {
+      query.$or = [
+        { name: { $regex: q, $options: 'i' } },
+        { description: { $regex: q, $options: 'i' } },
+        { sku: { $regex: q, $options: 'i' } },
+        { manufacturer: { $regex: q, $options: 'i' } }
+      ];
+    }
+    
+    // Build sort object
+    const sortObj = {};
+    sortObj[sort] = order === 'desc' ? -1 : 1;
+    
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Execute query
+    const products = await Product.find(query)
+      .populate('supplier', 'name companyName')
+      .sort(sortObj)
+      .skip(skip)
+      .limit(parseInt(limit));
+    
+    const total = await Product.countDocuments(query);
+    const totalPages = Math.ceil(total / parseInt(limit));
+    
+    res.json({
+      success: true,
+      data: {
+        products,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          totalPages,
+          hasNext: page < totalPages,
+          hasPrev: page > 1
+        }
+      }
     });
-
-    const product = await newProduct.save();
-    res.json(product);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
+  } catch (error) {
+    console.error('Get products error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while retrieving products'
+    });
   }
 });
 
-// @route   GET api/products
-// @desc    Get all products
-// @access  Private
-router.get('/', auth, async (req, res) => {
+/**
+ * @swagger
+ * /api/products:
+ *   post:
+ *     summary: Create a new product
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - description
+ *               - category
+ *               - sku
+ *               - price
+ *               - costPrice
+ *               - quantity
+ *               - unit
+ *               - expiryDate
+ *               - manufacturer
+ *               - supplier
+ *               - batchNumber
+ *             properties:
+ *               name:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               category:
+ *                 type: string
+ *               sku:
+ *                 type: string
+ *               price:
+ *                 type: number
+ *               costPrice:
+ *                 type: number
+ *               quantity:
+ *                 type: integer
+ *               unit:
+ *                 type: string
+ *               expiryDate:
+ *                 type: string
+ *                 format: date
+ *               manufacturer:
+ *                 type: string
+ *               supplier:
+ *                 type: string
+ *               batchNumber:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Product created successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ *       500:
+ *         description: Server error
+ */
+router.post('/', authenticateToken, canManageInventory, validateProductCreation, async (req, res) => {
   try {
-    const products = await Product.find().sort({ date: -1 });
-    res.json(products);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
+    const product = new Product(req.body);
+    await product.save();
+    
+    const populatedProduct = await Product.findById(product._id)
+      .populate('supplier', 'name companyName');
+    
+    res.status(201).json({
+      success: true,
+      message: 'Product created successfully',
+      data: { product: populatedProduct }
+    });
+  } catch (error) {
+    console.error('Create product error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while creating product'
+    });
   }
 });
 
-// @route   GET api/products/:id
-// @desc    Get a single product
-// @access  Private
-router.get('/:id', auth, async (req, res) => {
+/**
+ * @swagger
+ * /api/products/{id}:
+ *   get:
+ *     summary: Get product by ID
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Product ID
+ *     responses:
+ *       200:
+ *         description: Product retrieved successfully
+ *       400:
+ *         description: Invalid ID
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Product not found
+ *       500:
+ *         description: Server error
+ */
+router.get('/:id', authenticateToken, validateId, async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
-
+    const product = await Product.findById(req.params.id)
+      .populate('supplier', 'name companyName');
+    
     if (!product) {
-      return res.status(404).json({ msg: 'Product not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found'
+      });
     }
-
-    res.json(product);
-  } catch (err) {
-    console.error(err.message);
-    if (err.kind === 'ObjectId') {
-      return res.status(404).json({ msg: 'Product not found' });
-    }
-    res.status(500).send('Server Error');
+    
+    res.json({
+      success: true,
+      data: { product }
+    });
+  } catch (error) {
+    console.error('Get product error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while retrieving product'
+    });
   }
 });
 
-// @route   PUT api/products/:id
-// @desc    Update a product
-// @access  Private
-router.put('/:id', auth, async (req, res) => {
-  const { name, description, price, quantity, expiryDate, lowStockThreshold } = req.body;
-
-  // Build product object
-  const productFields = {};
-  if (name) productFields.name = name;
-  if (description) productFields.description = description;
-  if (price) productFields.price = price;
-  if (quantity) productFields.quantity = quantity;
-  if (expiryDate) productFields.expiryDate = expiryDate;
-  if (lowStockThreshold) productFields.lowStockThreshold = lowStockThreshold;
-
+/**
+ * @swagger
+ * /api/products/{id}:
+ *   put:
+ *     summary: Update product
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Product ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               price:
+ *                 type: number
+ *               quantity:
+ *                 type: integer
+ *               expiryDate:
+ *                 type: string
+ *                 format: date
+ *     responses:
+ *       200:
+ *         description: Product updated successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Product not found
+ *       500:
+ *         description: Server error
+ */
+router.put('/:id', authenticateToken, canManageInventory, validateId, validateProductUpdate, async (req, res) => {
   try {
-    let product = await Product.findById(req.params.id);
-
-    if (!product) return res.status(404).json({ msg: 'Product not found' });
-
-    product = await Product.findByIdAndUpdate(
+    const product = await Product.findByIdAndUpdate(
       req.params.id,
-      { $set: productFields },
+      req.body,
+      { new: true, runValidators: true }
+    ).populate('supplier', 'name companyName');
+    
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Product updated successfully',
+      data: { product }
+    });
+  } catch (error) {
+    console.error('Update product error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while updating product'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/products/{id}:
+ *   delete:
+ *     summary: Delete product
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Product ID
+ *     responses:
+ *       200:
+ *         description: Product deleted successfully
+ *       400:
+ *         description: Invalid ID
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Product not found
+ *       500:
+ *         description: Server error
+ */
+router.delete('/:id', authenticateToken, canManageInventory, validateId, async (req, res) => {
+  try {
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { isActive: false },
       { new: true }
     );
-
-    res.json(product);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
+    
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Product deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete product error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while deleting product'
+    });
   }
 });
 
-// @route   DELETE api/products/:id
-// @desc    Delete a product
-// @access  Private
-router.delete('/:id', auth, async (req, res) => {
+/**
+ * @swagger
+ * /api/products/low-stock:
+ *   get:
+ *     summary: Get low stock products
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Low stock products retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+router.get('/low-stock', authenticateToken, async (req, res) => {
   try {
-    let product = await Product.findById(req.params.id);
+    const products = await Product.findLowStock()
+      .populate('supplier', 'name companyName');
+    
+    res.json({
+      success: true,
+      data: { products }
+    });
+  } catch (error) {
+    console.error('Get low stock products error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while retrieving low stock products'
+    });
+  }
+});
 
-    if (!product) return res.status(404).json({ msg: 'Product not found' });
-
-    await Product.findByIdAndRemove(req.params.id);
-
-    res.json({ msg: 'Product removed' });
-  } catch (err) {
-    console.error(err.message);
-    if (err.kind === 'ObjectId') {
-      return res.status(404).json({ msg: 'Product not found' });
-    }
-    res.status(500).send('Server Error');
+/**
+ * @swagger
+ * /api/products/expiring:
+ *   get:
+ *     summary: Get expiring products
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: days
+ *         schema:
+ *           type: integer
+ *           default: 30
+ *         description: Days until expiry
+ *     responses:
+ *       200:
+ *         description: Expiring products retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+router.get('/expiring', authenticateToken, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const products = await Product.findExpiringSoon(days)
+      .populate('supplier', 'name companyName');
+    
+    res.json({
+      success: true,
+      data: { products }
+    });
+  } catch (error) {
+    console.error('Get expiring products error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while retrieving expiring products'
+    });
   }
 });
 
